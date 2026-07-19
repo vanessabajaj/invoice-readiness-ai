@@ -52,6 +52,34 @@ Signed-in users can bulk-import invoices from a spreadsheet at `/invoices/import
 - Map source columns to invoice fields (`vendor_name`, `invoice_number`, `amount`, `currency`, `status`, `due_date`); the mapping is auto-guessed from the headers and can be adjusted. `vendor_name` and `amount` are required.
 - Import writes rows into the `invoices` table via the Supabase client; RLS assigns each row to the current user.
 
+## Validation & readiness
+
+`src/lib/validation.ts` is a small, dependency-free rules engine that scores each
+invoice's readiness for financial processing:
+
+- `validateInvoice(invoice)` → `{ ready, score, issues }`. `ready` is `true` when
+  there are no `error`-severity issues; `score` is 0–100 (errors deduct more than
+  warnings).
+- Rules cover required fields (`vendor_name`, `invoice_number`, `amount`), positive
+  amounts, ISO-4217 currency format/recognition, valid `YYYY-MM-DD` due dates, and
+  known statuses.
+- `summarizeValidation(invoices)` aggregates ready/not-ready counts, average score,
+  and the most frequent issues.
+
+Readiness is surfaced in the import preview (per-row) and on the analysis dashboard.
+
+Run the unit tests:
+
+```bash
+npm test
+```
+
+## Dashboard
+
+`/invoices` is a protected analysis dashboard showing total/ready/not-ready counts,
+average readiness score, a status breakdown, the top readiness issues, and a table
+of the current user's invoices with per-row readiness.
+
 ## Database
 
 SQL migrations live in `supabase/migrations/` and are managed with the [Supabase CLI](https://supabase.com/docs/guides/local-development):
@@ -81,6 +109,7 @@ npx supabase db push
 - `npm run build` — create a production build
 - `npm run start` — run the production build
 - `npm run lint` — run ESLint
+- `npm test` — run unit tests (Vitest)
 
 ## Learn More
 

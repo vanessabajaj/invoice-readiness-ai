@@ -39,10 +39,16 @@ export default async function Home() {
         </div>
         <div className="flex items-center gap-3">
           <Link
-            href="/invoices/import"
+            href="/invoices"
             className="flex h-11 items-center justify-center rounded-full bg-foreground px-6 text-sm font-medium text-background transition-colors hover:opacity-90"
           >
-            Import invoices
+            Dashboard
+          </Link>
+          <Link
+            href="/invoices/import"
+            className="flex h-11 items-center justify-center rounded-full border border-black/[.08] px-6 text-sm font-medium transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a]"
+          >
+            Import
           </Link>
           <form action={signOut}>
             <button

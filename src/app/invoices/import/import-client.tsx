@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
@@ -9,6 +10,7 @@ import {
   parseFile,
   type ParsedSheet,
 } from "@/lib/invoice-import";
+import { summarizeValidation, validateInvoice } from "@/lib/validation";
 
 const PREVIEW_ROWS = 10;
 
@@ -45,6 +47,15 @@ export function ImportClient() {
   const mappedRows = useMemo(
     () => (sheet ? applyMapping(sheet, mapping) : []),
     [sheet, mapping],
+  );
+
+  const validations = useMemo(
+    () => mappedRows.map(validateInvoice),
+    [mappedRows],
+  );
+  const summary = useMemo(
+    () => summarizeValidation(mappedRows),
+    [mappedRows],
   );
 
   const missingRequired = INVOICE_FIELDS.filter(
@@ -99,16 +110,39 @@ export function ImportClient() {
           <section className="flex flex-col gap-3">
             <div className="flex items-baseline justify-between">
               <h2 className="text-lg font-semibold text-black dark:text-zinc-50">
-                Preview
+                Preview & readiness
               </h2>
               <span className="text-sm text-zinc-500">
                 {sheet.rows.length} row{sheet.rows.length === 1 ? "" : "s"}
               </span>
             </div>
+            <div className="flex flex-wrap gap-3">
+              <div className="rounded-xl border border-black/[.08] px-4 py-2 text-sm dark:border-white/[.145]">
+                <span className="font-semibold text-green-600 dark:text-green-400">
+                  {summary.ready}
+                </span>{" "}
+                ready
+              </div>
+              <div className="rounded-xl border border-black/[.08] px-4 py-2 text-sm dark:border-white/[.145]">
+                <span className="font-semibold text-red-600 dark:text-red-400">
+                  {summary.notReady}
+                </span>{" "}
+                not ready
+              </div>
+              <div className="rounded-xl border border-black/[.08] px-4 py-2 text-sm dark:border-white/[.145]">
+                avg score{" "}
+                <span className="font-semibold text-black dark:text-zinc-50">
+                  {summary.averageScore}
+                </span>
+              </div>
+            </div>
             <div className="overflow-x-auto rounded-xl border border-black/[.08] dark:border-white/[.145]">
               <table className="w-full text-left text-sm">
                 <thead className="bg-black/[.03] dark:bg-white/[.04]">
                   <tr>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium text-black dark:text-zinc-50">
+                      Readiness
+                    </th>
                     {sheet.headers.map((h) => (
                       <th
                         key={h}
@@ -120,21 +154,38 @@ export function ImportClient() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sheet.rows.slice(0, PREVIEW_ROWS).map((row, i) => (
-                    <tr
-                      key={i}
-                      className="border-t border-black/[.06] dark:border-white/[.08]"
-                    >
-                      {sheet.headers.map((h) => (
-                        <td
-                          key={h}
-                          className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300"
-                        >
-                          {row[h]}
+                  {sheet.rows.slice(0, PREVIEW_ROWS).map((row, i) => {
+                    const v = validations[i];
+                    return (
+                      <tr
+                        key={i}
+                        className="border-t border-black/[.06] dark:border-white/[.08]"
+                      >
+                        <td className="whitespace-nowrap px-3 py-2">
+                          <span
+                            title={v?.issues.map((x) => x.message).join("\n")}
+                            className={
+                              v?.ready
+                                ? "inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400"
+                                : "inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-700 dark:text-red-400"
+                            }
+                          >
+                            {v?.ready
+                              ? `Ready · ${v.score}`
+                              : `${v?.issues.length ?? 0} issue${(v?.issues.length ?? 0) === 1 ? "" : "s"} · ${v?.score ?? 0}`}
+                          </span>
                         </td>
-                      ))}
-                    </tr>
-                  ))}
+                        {sheet.headers.map((h) => (
+                          <td
+                            key={h}
+                            className="whitespace-nowrap px-3 py-2 text-zinc-700 dark:text-zinc-300"
+                          >
+                            {row[h]}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -204,7 +255,10 @@ export function ImportClient() {
               {result && "inserted" in result ? (
                 <p className="text-sm text-green-600 dark:text-green-400">
                   Imported {result.inserted} invoice
-                  {result.inserted === 1 ? "" : "s"}.
+                  {result.inserted === 1 ? "" : "s"}.{" "}
+                  <Link href="/invoices" className="underline">
+                    View dashboard
+                  </Link>
                 </p>
               ) : null}
               {result && "error" in result ? (
