@@ -18,7 +18,9 @@ cp .env.example .env.local
 
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
+# Provide one of these (the app accepts either name):
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
+# NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 ```
 
 Run the development server:
@@ -40,6 +42,29 @@ Uses [Supabase](https://supabase.com) OAuth (Google and GitHub) via `@supabase/s
 - `/` is protected and shows the signed-in user with a sign-out button.
 
 Enable the Google and GitHub providers in your Supabase dashboard (Authentication → Providers) and add `<your-app-url>/auth/callback` (e.g. `http://localhost:3000/auth/callback`) as a redirect URL under Authentication → URL Configuration.
+
+## Database
+
+SQL migrations live in `supabase/migrations/` and are managed with the [Supabase CLI](https://supabase.com/docs/guides/local-development):
+
+- `profiles` — one row per auth user, auto-created on signup via an `auth.users` trigger.
+- `invoices` — per-user invoices (`user_id` defaults to `auth.uid()`).
+
+Both tables have Row Level Security enabled so each user can only access their own rows.
+
+Run migrations against a local stack:
+
+```bash
+npx supabase start   # boots local Postgres + Auth (requires Docker)
+npx supabase db reset  # applies all migrations from scratch
+```
+
+Push to a linked remote project:
+
+```bash
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push
+```
 
 ## Scripts
 
