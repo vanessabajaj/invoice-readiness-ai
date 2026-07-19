@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import { signOut } from "./auth/actions";
@@ -36,14 +37,22 @@ export default async function Home() {
           </h1>
           <p className="text-zinc-600 dark:text-zinc-400">{user.email}</p>
         </div>
-        <form action={signOut}>
-          <button
-            type="submit"
+        <div className="flex items-center gap-3">
+          <Link
+            href="/invoices/import"
             className="flex h-11 items-center justify-center rounded-full bg-foreground px-6 text-sm font-medium text-background transition-colors hover:opacity-90"
           >
-            Sign out
-          </button>
-        </form>
+            Import invoices
+          </Link>
+          <form action={signOut}>
+            <button
+              type="submit"
+              className="flex h-11 items-center justify-center rounded-full border border-black/[.08] px-6 text-sm font-medium transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a]"
+            >
+              Sign out
+            </button>
+          </form>
+        </div>
       </main>
     </div>
   );

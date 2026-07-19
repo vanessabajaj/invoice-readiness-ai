@@ -43,6 +43,15 @@ Uses [Supabase](https://supabase.com) OAuth (Google and GitHub) via `@supabase/s
 
 Enable the Google and GitHub providers in your Supabase dashboard (Authentication → Providers) and add `<your-app-url>/auth/callback` (e.g. `http://localhost:3000/auth/callback`) as a redirect URL under Authentication → URL Configuration.
 
+## Invoice import
+
+Signed-in users can bulk-import invoices from a spreadsheet at `/invoices/import`:
+
+- Upload a **CSV or XLSX** file (parsed client-side with `papaparse` / `xlsx`).
+- Preview the first rows of the detected sheet.
+- Map source columns to invoice fields (`vendor_name`, `invoice_number`, `amount`, `currency`, `status`, `due_date`); the mapping is auto-guessed from the headers and can be adjusted. `vendor_name` and `amount` are required.
+- Import writes rows into the `invoices` table via the Supabase client; RLS assigns each row to the current user.
+
 ## Database
 
 SQL migrations live in `supabase/migrations/` and are managed with the [Supabase CLI](https://supabase.com/docs/guides/local-development):
