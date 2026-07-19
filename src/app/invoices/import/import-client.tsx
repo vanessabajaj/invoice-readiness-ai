@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
-import { createClient } from "@/utils/supabase/client";
+import { importInvoices } from "./actions";
 import {
   applyMapping,
   duplicateInvoiceRows,
@@ -15,7 +15,7 @@ import { summarizeValidation, validateInvoice } from "@/lib/validation";
 
 const PREVIEW_ROWS = 10;
 
-type ImportResult = { inserted: number } | { error: string };
+type ImportResult = { inserted: number; failed: number; batchId: string } | { error: string };
 
 export function ImportClient() {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -25,11 +25,13 @@ export function ImportClient() {
   const [parseError, setParseError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [submissionId, setSubmissionId] = useState(() => crypto.randomUUID());
 
   async function handleFile(file: File) {
     setParseError(null);
     setResult(null);
     setFileName(file.name);
+    setSubmissionId(crypto.randomUUID());
     try {
       const parsed = await parseFile(file);
       if (parsed.headers.length === 0) {
@@ -55,7 +57,7 @@ export function ImportClient() {
   );
 
   const validations = useMemo(
-    () => mappedRows.map(validateInvoice),
+    () => mappedRows.map((row) => validateInvoice(row)),
     [mappedRows],
   );
   const summary = useMemo(
@@ -74,24 +76,15 @@ export function ImportClient() {
     sheet !== null &&
     missingRequired.length === 0 &&
     mappedRows.length > 0 &&
-    validations.every((validation) => validation.ready) &&
-    duplicateRows.size === 0 &&
     !(result && "inserted" in result);
 
   async function handleImport() {
     if (!canImport) return;
     setImporting(true);
     setResult(null);
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("invoices")
-      .upsert(mappedRows, {
-        onConflict: "user_id,invoice_number",
-        ignoreDuplicates: true,
-      })
-      .select("id");
+    const response = await importInvoices({ submissionId, originalFilename: fileName, fileType: fileName?.toLowerCase().endsWith(".xlsx") ? "xlsx" : "csv", mapping, rows: sheet?.rows ?? [] });
     setImporting(false);
-    setResult(error ? { error: error.message } : { inserted: data?.length ?? 0 });
+    setResult(response.ok ? { inserted: response.inserted, failed: response.failed, batchId: response.batchId } : { error: response.error });
   }
 
   return (
@@ -258,7 +251,7 @@ export function ImportClient() {
             {missingRequired.length === 0 &&
             validations.some((validation) => !validation.ready) ? (
               <p className="text-sm text-red-600 dark:text-red-400">
-                Fix every error shown in the preview before importing.
+                Invalid rows will be recorded in import history and will not be inserted.
               </p>
             ) : null}
             {duplicateRows.size > 0 ? (
@@ -282,8 +275,7 @@ export function ImportClient() {
               </button>
               {result && "inserted" in result ? (
                 <p className="text-sm text-green-600 dark:text-green-400">
-                  Imported {result.inserted} new invoice
-                  {result.inserted === 1 ? "" : "s"}.{" "}
+                  Imported {result.inserted}; recorded {result.failed} failed row{result.failed === 1 ? "" : "s"}.{" "}
                   <Link href="/invoices" className="underline">
                     View dashboard
                   </Link>

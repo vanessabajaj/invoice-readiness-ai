@@ -26,7 +26,7 @@ export type InvoiceField = {
 export const INVOICE_FIELDS: InvoiceField[] = [
   {
     key: "vendor_name",
-    label: "Vendor name",
+    label: "Supplier name",
     required: true,
     aliases: ["vendor", "supplier", "company", "payee", "biller"],
   },
@@ -37,15 +37,19 @@ export const INVOICE_FIELDS: InvoiceField[] = [
     aliases: ["invoice number", "invoice no", "invoice #", "number", "inv"],
   },
   {
-    key: "amount",
-    label: "Amount",
+    key: "invoice_date", label: "Invoice date", required: true, aliases: ["invoice date", "issued", "date"],
+  },
+  { key: "subtotal", label: "Subtotal", required: true, aliases: ["subtotal", "net amount", "net"] },
+  {
+    key: "total_amount",
+    label: "Total amount",
     required: true,
     aliases: ["amount", "total", "sum", "value", "price"],
   },
   {
     key: "currency",
     label: "Currency",
-    required: false,
+    required: true,
     aliases: ["currency", "ccy"],
   },
   {
@@ -54,6 +58,13 @@ export const INVOICE_FIELDS: InvoiceField[] = [
     required: false,
     aliases: ["status", "state"],
   },
+  { key: "tax_rate", label: "Tax rate", required: false, aliases: ["tax rate", "vat rate"] },
+  { key: "tax_amount", label: "Tax amount", required: false, aliases: ["tax amount", "vat amount", "tax"] },
+  { key: "supplier_tax_id", label: "Supplier tax ID", required: false, aliases: ["supplier tax", "vendor tax", "trn"] },
+  { key: "buyer_name", label: "Buyer name", required: false, aliases: ["buyer", "customer"] },
+  { key: "buyer_tax_id", label: "Buyer tax ID", required: false, aliases: ["buyer tax", "customer tax"] },
+  { key: "purchase_order_number", label: "Purchase order", required: false, aliases: ["purchase order", "po number", "po"] },
+  { key: "payment_terms", label: "Payment terms", required: false, aliases: ["payment terms", "terms"] },
   {
     key: "due_date",
     label: "Due date",
@@ -133,7 +144,9 @@ export async function parseFile(file: File): Promise<ParsedSheet> {
   const name = file.name.toLowerCase();
   const isCsv = file.type === "text/csv" || name.endsWith(".csv");
   if (isCsv) {
-    const result = Papa.parse<string[]>(await file.text(), {
+    const contents = await file.text();
+    if (!contents.trim()) throw new Error("Spreadsheet file is empty.");
+    const result = Papa.parse<string[]>(contents, {
       skipEmptyLines: "greedy",
     });
     if (result.errors.length > 0) {
@@ -210,10 +223,20 @@ export function guessMapping(headers: string[]): Record<string, string> {
 export type MappedInvoice = {
   vendor_name: string;
   invoice_number: string;
+  invoice_date: string | null;
+  subtotal: number;
+  tax_rate: number | null;
+  tax_amount: number;
+  total_amount: number;
   amount: number;
   currency: string;
   status: string;
   due_date: string | null;
+  supplier_tax_id: string | null;
+  buyer_name: string | null;
+  buyer_tax_id: string | null;
+  purchase_order_number: string | null;
+  payment_terms: string | null;
 };
 
 const CURRENCY_SYMBOLS = /^[\s$€£¥₹]+|[\s$€£¥₹]+$/g;
@@ -242,10 +265,20 @@ export function applyMapping(
   return sheet.rows.map((row) => ({
     vendor_name: get(row, "vendor_name"),
     invoice_number: get(row, "invoice_number"),
-    amount: parseAmount(get(row, "amount")),
-    currency: (get(row, "currency") || "USD").toUpperCase(),
+    invoice_date: get(row, "invoice_date") || null,
+    subtotal: parseAmount(get(row, "subtotal")),
+    tax_rate: get(row, "tax_rate") ? parseAmount(get(row, "tax_rate")) : null,
+    tax_amount: get(row, "tax_amount") ? parseAmount(get(row, "tax_amount")) : 0,
+    total_amount: parseAmount(get(row, "total_amount")),
+    amount: parseAmount(get(row, "total_amount")),
+    currency: get(row, "currency").toUpperCase(),
     status: (get(row, "status") || "draft").toLowerCase(),
     due_date: get(row, "due_date") || null,
+    supplier_tax_id: get(row, "supplier_tax_id") || null,
+    buyer_name: get(row, "buyer_name") || null,
+    buyer_tax_id: get(row, "buyer_tax_id") || null,
+    purchase_order_number: get(row, "purchase_order_number") || null,
+    payment_terms: get(row, "payment_terms") || null,
   }));
 }
 
@@ -253,7 +286,7 @@ export function duplicateInvoiceRows(invoices: MappedInvoice[]): Set<number> {
   const firstRow = new Map<string, number>();
   const duplicates = new Set<number>();
   invoices.forEach((invoice, index) => {
-    const key = invoice.invoice_number.trim().toLowerCase();
+    const key = `${invoice.vendor_name.trim().toLowerCase()}\u0000${invoice.invoice_number.trim().toLowerCase()}`;
     if (!key) return;
     const previous = firstRow.get(key);
     if (previous === undefined) firstRow.set(key, index);

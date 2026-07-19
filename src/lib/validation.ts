@@ -1,249 +1,138 @@
-// Invoice readiness validation engine.
-//
-// Given an invoice, each rule reports zero or more issues. An invoice is
-// "ready" for financial processing when it has no `error`-severity issues.
-// A 0-100 readiness score is derived by deducting each issue's weight.
-
-export type ValidationSeverity = "error" | "warning";
+export type ValidationSeverity = "critical" | "warning";
+export type ValidationCategory =
+  | "required_fields"
+  | "financial_calculations"
+  | "tax_consistency"
+  | "data_formatting"
+  | "duplicate_anomaly";
 
 export type ValidationIssue = {
-  /** Target field the issue relates to, or "invoice" for whole-record checks. */
-  field: string;
-  /** Stable rule identifier, useful for grouping/analytics. */
+  ruleId: string;
   rule: string;
+  category: ValidationCategory;
+  field: string;
   severity: ValidationSeverity;
   message: string;
+  actualValue: unknown;
+  expectedValue?: unknown;
+  suggestedCorrection: string;
 };
 
 export type InvoiceInput = {
   vendor_name?: string | null;
+  supplier_name?: string | null;
   invoice_number?: string | null;
-  amount?: number | null;
-  currency?: string | null;
-  status?: string | null;
+  invoice_date?: string | null;
   due_date?: string | null;
+  currency?: string | null;
+  subtotal?: number | string | null;
+  tax_rate?: number | string | null;
+  tax_amount?: number | string | null;
+  total_amount?: number | string | null;
+  amount?: number | string | null;
+  supplier_tax_id?: string | null;
+  buyer_tax_id?: string | null;
+  status?: string | null;
+};
+
+export type DuplicateContext = {
+  sameBatch?: boolean;
+  existing?: boolean;
+};
+
+export const INVOICE_STATUSES = ["draft", "pending", "ready", "rejected"] as const;
+const CURRENCIES = new Set(["AED", "AUD", "BRL", "CAD", "CHF", "CNY", "DKK", "EUR", "GBP", "HKD", "INR", "JPY", "MXN", "NOK", "NZD", "SAR", "SEK", "SGD", "USD", "ZAR"]);
+const CATEGORY_WEIGHTS: Record<ValidationCategory, number> = {
+  required_fields: 30,
+  financial_calculations: 25,
+  tax_consistency: 20,
+  data_formatting: 15,
+  duplicate_anomaly: 10,
 };
 
 export type ValidationResult = {
   ready: boolean;
-  /** 0-100; 100 means no issues. */
   score: number;
+  overallScore: number;
+  categoryScores: Record<ValidationCategory, number>;
+  passedRuleCount: number;
+  warningCount: number;
+  criticalErrorCount: number;
   issues: ValidationIssue[];
 };
 
-export const INVOICE_STATUSES = [
-  "draft",
-  "pending",
-  "ready",
-  "rejected",
-] as const;
-
-// Common ISO 4217 codes. Unknown-but-well-formed codes are only a warning.
-const KNOWN_CURRENCIES = new Set([
-  "USD",
-  "EUR",
-  "GBP",
-  "JPY",
-  "CAD",
-  "AUD",
-  "CHF",
-  "CNY",
-  "INR",
-  "SEK",
-  "NOK",
-  "DKK",
-  "SGD",
-  "HKD",
-  "NZD",
-  "MXN",
-  "BRL",
-  "ZAR",
-]);
-
-const WEIGHTS: Record<ValidationSeverity, number> = {
-  error: 25,
-  warning: 8,
+const blank = (value: unknown) => value == null || String(value).trim() === "";
+const decimal = (value: unknown): number | null => {
+  if (blank(value)) return null;
+  const parsed = typeof value === "number" ? value : Number(String(value).replaceAll(",", ""));
+  return Number.isFinite(parsed) ? parsed : null;
 };
+const cents = (value: number) => Math.round(value * 100);
 
-type Rule = (invoice: InvoiceInput) => ValidationIssue | null;
+export function normalizeCurrency(value: unknown): string {
+  return String(value ?? "").trim().toUpperCase();
+}
 
-const isBlank = (v: unknown): boolean =>
-  v === null || v === undefined || String(v).trim() === "";
-
-// YYYY-MM-DD, validated for a real calendar date.
-function parseIsoDate(value: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+export function parseIsoDate(value: unknown): Date | null {
+  if (blank(value)) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value).trim());
   if (!match) return null;
-  const [, y, m, d] = match;
-  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
-  if (
-    date.getUTCFullYear() !== Number(y) ||
-    date.getUTCMonth() !== Number(m) - 1 ||
-    date.getUTCDate() !== Number(d)
-  ) {
-    return null;
-  }
-  return date;
+  const date = new Date(Date.UTC(+match[1], +match[2] - 1, +match[3]));
+  return date.getUTCFullYear() === +match[1] && date.getUTCMonth() === +match[2] - 1 && date.getUTCDate() === +match[3] ? date : null;
 }
 
-const RULES: Rule[] = [
-  (inv) =>
-    isBlank(inv.vendor_name)
-      ? {
-          field: "vendor_name",
-          rule: "vendor_name_required",
-          severity: "error",
-          message: "Vendor name is required.",
-        }
-      : null,
+function issue(category: ValidationCategory, ruleId: string, field: string, severity: ValidationSeverity, message: string, actualValue: unknown, expectedValue: unknown, suggestedCorrection: string): ValidationIssue {
+  return { category, ruleId, rule: ruleId, field, severity, message, actualValue, expectedValue, suggestedCorrection };
+}
 
-  (inv) =>
-    isBlank(inv.invoice_number)
-      ? {
-          field: "invoice_number",
-          rule: "invoice_number_required",
-          severity: "error",
-          message: "Invoice number is required.",
-        }
-      : null,
-
-  (inv) => {
-    if (
-      inv.amount === null ||
-      inv.amount === undefined ||
-      !Number.isFinite(inv.amount)
-    ) {
-      return {
-        field: "amount",
-        rule: "amount_required",
-        severity: "error",
-        message: "Amount is required.",
-      };
-    }
-    if (inv.amount <= 0) {
-      return {
-        field: "amount",
-        rule: "amount_positive",
-        severity: "error",
-        message: "Amount must be greater than zero.",
-      };
-    }
-    return null;
-  },
-
-  (inv) => {
-    if (isBlank(inv.currency)) {
-      return {
-        field: "currency",
-        rule: "currency_missing",
-        severity: "warning",
-        message: "Currency is missing; defaulting is discouraged.",
-      };
-    }
-    const code = String(inv.currency).trim().toUpperCase();
-    if (!/^[A-Z]{3}$/.test(code)) {
-      return {
-        field: "currency",
-        rule: "currency_format",
-        severity: "error",
-        message: `Currency "${inv.currency}" is not a 3-letter ISO code.`,
-      };
-    }
-    if (!KNOWN_CURRENCIES.has(code)) {
-      return {
-        field: "currency",
-        rule: "currency_unknown",
-        severity: "warning",
-        message: `Currency "${code}" is not a recognized code.`,
-      };
-    }
-    return null;
-  },
-
-  (inv) => {
-    if (isBlank(inv.due_date)) {
-      return {
-        field: "due_date",
-        rule: "due_date_missing",
-        severity: "warning",
-        message: "Due date is missing.",
-      };
-    }
-    if (!parseIsoDate(String(inv.due_date))) {
-      return {
-        field: "due_date",
-        rule: "due_date_format",
-        severity: "error",
-        message: `Due date "${inv.due_date}" is not a valid YYYY-MM-DD date.`,
-      };
-    }
-    return null;
-  },
-
-  (inv) => {
-    if (isBlank(inv.status)) return null;
-    const status = String(inv.status).trim().toLowerCase();
-    return (INVOICE_STATUSES as readonly string[]).includes(status)
-      ? null
-      : {
-          field: "status",
-          rule: "status_unknown",
-          severity: "error",
-          message: `Status "${inv.status}" is not one of ${INVOICE_STATUSES.join(", ")}.`,
-        };
-  },
-];
-
-export function validateInvoice(invoice: InvoiceInput): ValidationResult {
+export function validateInvoice(invoice: InvoiceInput, duplicates: DuplicateContext = {}): ValidationResult {
   const issues: ValidationIssue[] = [];
-  for (const rule of RULES) {
-    const issue = rule(invoice);
-    if (issue) issues.push(issue);
+  const supplier = invoice.vendor_name ?? invoice.supplier_name;
+  const total = decimal(invoice.total_amount ?? invoice.amount);
+  const subtotal = decimal(invoice.subtotal);
+  const tax = decimal(invoice.tax_amount);
+  const rate = decimal(invoice.tax_rate);
+  const required: [string, unknown][] = [
+    ["vendor_name", supplier], ["invoice_number", invoice.invoice_number], ["invoice_date", invoice.invoice_date],
+    ["currency", invoice.currency], ["subtotal", subtotal], ["total_amount", total],
+  ];
+  for (const [field, value] of required) if (blank(value)) issues.push(issue("required_fields", `${field}_required`, field, "critical", `${field.replaceAll("_", " ")} is required.`, value, "A non-empty value", `Enter a ${field.replaceAll("_", " ")}.`));
+
+  if (subtotal !== null && subtotal < 0) issues.push(issue("financial_calculations", "subtotal_non_negative", "subtotal", "critical", "Subtotal must not be negative.", subtotal, ">= 0", "Enter a non-negative subtotal."));
+  if (tax !== null && tax < 0) issues.push(issue("financial_calculations", "tax_amount_non_negative", "tax_amount", "critical", "Tax amount must not be negative.", tax, ">= 0", "Enter a non-negative tax amount."));
+  if (total !== null && total <= 0) issues.push(issue("financial_calculations", "total_amount_positive", "total_amount", "critical", "Total amount must be greater than zero.", total, "> 0", "Enter a positive total amount."));
+  if (subtotal !== null && tax !== null && total !== null && Math.abs(cents(subtotal + tax) - cents(total)) > 1) issues.push(issue("financial_calculations", "total_equals_subtotal_plus_tax", "total_amount", "critical", "Subtotal plus tax amount must equal total amount within 0.01.", total, subtotal + tax, "Correct the subtotal, tax amount, or total."));
+  if (subtotal !== null && tax !== null && rate !== null) {
+    const expected = subtotal * (rate > 1 ? rate / 100 : rate);
+    if (Math.abs(cents(expected) - cents(tax)) > 1) issues.push(issue("tax_consistency", "tax_rate_matches_amount", "tax_amount", "critical", "Tax amount does not agree with subtotal × tax rate.", tax, Number(expected.toFixed(2)), "Correct the tax rate or tax amount."));
   }
 
-  const deduction = issues.reduce((sum, i) => sum + WEIGHTS[i.severity], 0);
-  const score = Math.max(0, 100 - deduction);
-  const ready = !issues.some((i) => i.severity === "error");
+  const invoiceDate = parseIsoDate(invoice.invoice_date);
+  const dueDate = parseIsoDate(invoice.due_date);
+  if (!blank(invoice.invoice_date) && !invoiceDate) issues.push(issue("data_formatting", "invoice_date_valid", "invoice_date", "critical", "Invoice date must be a real YYYY-MM-DD calendar date.", invoice.invoice_date, "YYYY-MM-DD", "Enter a real calendar date."));
+  if (!blank(invoice.due_date) && !dueDate) issues.push(issue("data_formatting", "due_date_valid", "due_date", "critical", "Due date must be a real YYYY-MM-DD calendar date.", invoice.due_date, "YYYY-MM-DD", "Enter a real calendar date."));
+  if (invoiceDate && dueDate && dueDate < invoiceDate) issues.push(issue("data_formatting", "due_date_not_before_invoice_date", "due_date", "critical", "Due date cannot be earlier than invoice date.", invoice.due_date, `On or after ${invoice.invoice_date}`, "Move the due date on or after the invoice date."));
+  const currency = normalizeCurrency(invoice.currency);
+  if (!blank(invoice.currency) && !/^[A-Z]{3}$/.test(currency)) issues.push(issue("data_formatting", "currency_format", "currency", "critical", "Currency must be a three-letter code.", invoice.currency, "ISO-style three-letter code", "Enter a three-letter currency code."));
+  else if (currency && !CURRENCIES.has(currency)) issues.push(issue("data_formatting", "currency_unknown", "currency", "critical", `Currency ${currency} is not recognised.`, currency, "A recognised currency code", "Choose a recognised currency."));
+  for (const [field, value] of [["supplier_tax_id", invoice.supplier_tax_id], ["buyer_tax_id", invoice.buyer_tax_id]] as const) if (!blank(value) && !/^[A-Z0-9][A-Z0-9 .\/-]{4,29}$/i.test(String(value).trim())) issues.push(issue("tax_consistency", `${field}_format`, field, "warning", "Tax ID does not match the configured generic format.", value, "5–30 letters, numbers, spaces, dots, slashes or hyphens", "Check the identifier or configure a jurisdiction-specific format."));
+  if (duplicates.sameBatch) issues.push(issue("duplicate_anomaly", "duplicate_same_batch", "invoice_number", "critical", "Supplier and invoice number are repeated in this import batch.", invoice.invoice_number, "Unique within this batch", "Review both rows; do not silently discard either."));
+  if (duplicates.existing) issues.push(issue("duplicate_anomaly", "duplicate_existing_invoice", "invoice_number", "critical", "A matching supplier and invoice number exists in an earlier import.", invoice.invoice_number, "Unique for this supplier", "Review the existing invoice before importing."));
 
-  return { ready, score, issues };
+  const allRules: Record<ValidationCategory, number> = { required_fields: 6, financial_calculations: 4, tax_consistency: 3, data_formatting: 4, duplicate_anomaly: 2 };
+  const categoryScores = Object.fromEntries(Object.keys(CATEGORY_WEIGHTS).map((category) => {
+    const failures = issues.filter((i) => i.category === category).reduce((sum, i) => sum + (i.severity === "critical" ? 1 : 0.5), 0);
+    return [category, Math.max(0, Math.round(100 * (1 - failures / allRules[category as ValidationCategory])))];
+  })) as Record<ValidationCategory, number>;
+  const overallScore = Math.round(Object.entries(CATEGORY_WEIGHTS).reduce((sum, [category, weight]) => sum + categoryScores[category as ValidationCategory] * weight / 100, 0));
+  const warningCount = issues.filter((i) => i.severity === "warning").length;
+  const criticalErrorCount = issues.filter((i) => i.severity === "critical").length;
+  return { ready: criticalErrorCount === 0, score: overallScore, overallScore, categoryScores, passedRuleCount: Object.values(allRules).reduce((a, b) => a + b, 0) - issues.length, warningCount, criticalErrorCount, issues };
 }
 
-export type ValidationSummary = {
-  total: number;
-  ready: number;
-  notReady: number;
-  averageScore: number;
-  /** Count of issues keyed by rule id, most frequent first. */
-  topIssues: { rule: string; severity: ValidationSeverity; count: number }[];
-};
-
-export function summarizeValidation(
-  invoices: InvoiceInput[],
-): ValidationSummary {
-  const results = invoices.map(validateInvoice);
-  const ready = results.filter((r) => r.ready).length;
-  const scoreSum = results.reduce((sum, r) => sum + r.score, 0);
-
-  const counts = new Map<string, { severity: ValidationSeverity; count: number }>();
-  for (const result of results) {
-    for (const issue of result.issues) {
-      const existing = counts.get(issue.rule);
-      if (existing) existing.count += 1;
-      else counts.set(issue.rule, { severity: issue.severity, count: 1 });
-    }
-  }
-
-  const topIssues = [...counts.entries()]
-    .map(([rule, v]) => ({ rule, severity: v.severity, count: v.count }))
-    .sort((a, b) => b.count - a.count);
-
-  return {
-    total: results.length,
-    ready,
-    notReady: results.length - ready,
-    averageScore: results.length
-      ? Math.round(scoreSum / results.length)
-      : 0,
-    topIssues,
-  };
+export function summarizeValidation(invoices: InvoiceInput[]) {
+  const results = invoices.map((invoice) => validateInvoice(invoice));
+  const counts = new Map<string, { severity: ValidationSeverity; count: number; message: string }>();
+  for (const result of results) for (const i of result.issues) { const current = counts.get(i.ruleId); counts.set(i.ruleId, { severity: i.severity, count: (current?.count ?? 0) + 1, message: i.message }); }
+  return { total: results.length, ready: results.filter((r) => r.ready).length, notReady: results.filter((r) => !r.ready).length, failed: results.filter((r) => r.overallScore < 50).length, averageScore: results.length ? Math.round(results.reduce((s, r) => s + r.overallScore, 0) / results.length) : 0, topIssues: [...counts.entries()].map(([rule, value]) => ({ rule, ...value })).sort((a, b) => b.count - a.count) };
 }

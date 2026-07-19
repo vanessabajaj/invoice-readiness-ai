@@ -1,125 +1,69 @@
-# invoice-readiness-ai
+# Invoice Readiness AI
 
-A [Next.js](https://nextjs.org) application (TypeScript, App Router, Tailwind CSS) bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+A Next.js 16 and Supabase prototype that imports CSV/XLSX invoice data, applies deterministic readiness checks, records row-level failures, and supports correction and revalidation.
 
-## Getting Started
+> This application is a prototype invoice-readiness analyzer and is not an officially certified tax-compliance platform.
 
-Use Node.js 22 (see `.nvmrc`) and install dependencies from the lockfile:
+## Implemented features
 
-```bash
-npm ci
-```
+- Anonymous Supabase authentication with owner-scoped Row-Level Security.
+- Browser CSV/XLSX parsing and mapping preview; authenticated server-side batch creation, validation, duplicate detection, and insertion.
+- Expanded invoice fields, safe PostgreSQL decimal columns, category scores, detailed issues, batch history, rejected-row review, and failed-row CSV export.
+- Invoice detail/correction at `/invoices/[id]`; edits are authorized, Zod-validated, revalidated, and scored server-side.
+- Search, readiness/status/currency/batch filters, sorting, pagination, summary cards, and clickable common-error filters.
 
-Configure Supabase environment variables. Copy `.env.example` to `.env.local` and fill in your project's values (Supabase dashboard → Project Settings → API):
+## Architecture
 
-```bash
-cp .env.example .env.local
-```
-
-```
-NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
-# Provide one of these (the app accepts either name):
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
-# NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-```
-
-Run the development server:
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) in your browser to see the app. Edit `src/app/page.tsx` and the page auto-updates.
-
-## Authentication
-
-No login page. Uses [Supabase](https://supabase.com) anonymous sign-in via `@supabase/ssr` — every visitor is silently assigned their own Supabase user on first request, so `invoices` rows still stay scoped per-visitor via Row Level Security.
-
-- `src/utils/supabase/*` — browser, server, and proxy Supabase clients.
-- `src/proxy.ts` — refreshes the session on every request and creates an anonymous session for visitors who don't have one yet.
-- `/` shows the current session with a sign-out button (starts a fresh anonymous session on next visit).
-
-Requires "Allow anonymous sign-ins" enabled in the Supabase dashboard under Authentication → Sign In / Providers.
-
-## Invoice import
-
-Bulk-import invoices from a spreadsheet at `/invoices/import` (each visitor's anonymous session scopes their own invoices):
-
-- Upload a **CSV or XLSX** file up to 5 MB (parsed client-side with `papaparse` / `exceljs`). Imports are limited to 5,000 rows, 50 columns, 10,000 characters per cell, 200 XLSX archive entries, and 25 MB of expanded XLSX content.
-- Preview the first rows of the detected sheet.
-- Map source columns to invoice fields (`vendor_name`, `invoice_number`, `amount`, `currency`, `status`, `due_date`); the mapping is auto-guessed from the headers and can be adjusted. `vendor_name`, `invoice_number`, and `amount` are required. Blank currency/status values default to `USD`/`draft`.
-- Every row must pass readiness validation before import. Ambiguous amounts and non-ISO dates are rejected.
-- Import writes rows into the `invoices` table via the Supabase client. The `user_id` default assigns the authenticated user and RLS enforces ownership. A per-user invoice-number constraint makes retries and repeated files idempotent.
-
-## Validation & readiness
-
-`src/lib/validation.ts` is a small, dependency-free rules engine that scores each
-invoice's readiness for financial processing:
-
-- `validateInvoice(invoice)` → `{ ready, score, issues }`. `ready` is `true` when
-  there are no `error`-severity issues; `score` is 0–100 (errors deduct more than
-  warnings).
-- Rules cover required fields (`vendor_name`, `invoice_number`, `amount`), positive
-  amounts, ISO-4217 currency format/recognition, valid `YYYY-MM-DD` due dates, and
-  known statuses.
-- `summarizeValidation(invoices)` aggregates ready/not-ready counts, average score,
-  and the most frequent issues.
-
-Readiness is surfaced in the import preview (per-row) and on the analysis dashboard.
-
-Run the unit tests:
-
-```bash
-npm test
-```
-
-Run local database/RLS integration tests (requires Docker):
-
-```bash
-npm run test:db
-```
-
-## Dashboard
-
-`/invoices` is an analysis dashboard showing total/ready/not-ready counts,
-average readiness score, a status breakdown, the top readiness issues, and a table
-of the current visitor's invoices with per-row readiness.
+The App Router UI lives in `src/app`. Server Actions own mutations. `src/lib/invoice-import.ts` performs bounded file parsing/mapping and `src/lib/validation.ts` is the deterministic rules engine. Supabase Postgres stores invoices, batches, rejected rows and validation snapshots. The publishable/anon key is used with the authenticated cookie session; no service-role key is present in browser code.
 
 ## Database
 
-SQL migrations live in `supabase/migrations/` and are managed with the [Supabase CLI](https://supabase.com/docs/guides/local-development):
+Migrations in `supabase/migrations` create `profiles`, `invoices`, `invoice_import_batches`, and `invoice_import_rejected_rows`. Monetary columns use `numeric`, invoice ownership and batch ownership are enforced with RLS, and a trigger prevents linking an invoice to another user's batch. The expanded migration backfills legacy `amount` into `total_amount`.
 
-- `profiles` — one row per auth user, auto-created on signup via an `auth.users` trigger.
-- `invoices` — per-user invoices (`user_id` defaults to `auth.uid()`).
+## Validation methodology
 
-Both tables have Row Level Security enabled so each user can only access their own rows.
+The server calculates a weighted score: required fields 30%, financial calculations 25%, tax consistency 20%, data formatting 15%, and duplicate/anomaly checks 10%. Rules check required values, cent-safe arithmetic with a 0.01 tolerance, tax math, real calendar dates, currency recognition, generic configurable tax-ID formatting, and normalized supplier/invoice duplicates. Issues include rule ID, field, severity, actual/expected values, message, and a suggested correction.
 
-Run migrations against a local stack:
+## Import workflow
 
-```bash
-npx supabase start   # boots local Postgres + Auth (requires Docker)
-npx supabase db reset  # applies all migrations from scratch
-```
+Upload a CSV or XLSX file (5 MB, 5,000 rows, 50 columns), review and map it, then submit. The server authenticates the session, validates the payload and every row, checks existing records, creates an idempotent batch, inserts only ready invoices, and records rejected original rows. Visit `/invoices/imports` for history and exports.
 
-Push to a linked remote project:
+## Local and Supabase setup
+
+Use Node 22 and Docker:
 
 ```bash
-npx supabase link --project-ref <your-project-ref>
-npx supabase db push
+npm ci
+cp .env.example .env.local
+npx supabase start
+npx supabase db reset
+npm run dev
 ```
 
-## Scripts
+Enable anonymous sign-ins in Supabase Auth. Configure:
 
-- `npm run dev` — start the development server
-- `npm run build` — create a production build
-- `npm run start` — run the production build
-- `npm run lint` — run ESLint
-- `npm test` — run unit tests (Vitest)
-- `npm run typecheck` — run TypeScript without emitting files
-- `npm run test:db` — reset local Supabase and run two-user RLS/integrity tests
-- `npm run verify` — run unit tests, lint, typecheck, and production build
+```text
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
+# NEXT_PUBLIC_SUPABASE_ANON_KEY is also accepted
+```
 
-## Learn More
+## Tests and CI
 
-- [Next.js Documentation](https://nextjs.org/docs)
-- [Learn Next.js](https://nextjs.org/learn)
+```bash
+npm run lint
+npx tsc --noEmit
+npm test
+npm run build
+npm run test:db
+```
+
+GitHub Actions runs the application checks on pushes and pull requests and a clean local Supabase reset plus two-user SQL isolation tests.
+
+## Security model
+
+Identity always comes from `supabase.auth.getUser()` or `auth.uid()`. Server mutations validate untrusted payloads with Zod and scope reads/writes by the authenticated user; RLS provides a second boundary. Browser scores, validation output, owner IDs, and service credentials are never trusted. Original rejected rows may contain business data, so access is owner-only and CSV responses are private/no-store.
+
+## Known limitations and roadmap
+
+Tax-ID validation is generic rather than jurisdiction-specific. Import persistence is coordinated by the Server Action but is not yet a single database transaction. Anonymous browser identity is unsuitable for durable multi-device accounts. There is no PDF/OCR, ERP, Peppol, FTA connectivity, AI chatbot, or certification claim. Next priorities are transactional import RPCs, jurisdiction rule profiles, authenticated organizations/roles, audit history, and maintained Playwright fixtures.

@@ -29,6 +29,9 @@ $$;
 insert into public.invoices (vendor_name, invoice_number, amount)
 values ('First vendor', 'FIRST-1', 10);
 
+insert into public.invoice_import_batches (submission_id, original_filename, file_type, total_rows)
+values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'first.csv', 'csv', 1);
+
 do $$
 declare
   visible_invoices integer;
@@ -36,6 +39,10 @@ begin
   select count(*) into visible_invoices from public.invoices;
   if visible_invoices <> 1 then
     raise exception 'expected one owner invoice, got %', visible_invoices;
+  end if;
+
+  if (select count(*) from public.invoice_import_batches) <> 1 then
+    raise exception 'expected one owner import batch';
   end if;
 
   begin
@@ -59,8 +66,19 @@ $$;
 
 do $$
 begin
+  begin
+    insert into public.invoice_import_batches (user_id, submission_id, original_filename, file_type)
+    values ('22222222-2222-2222-2222-222222222222', gen_random_uuid(), 'attack.csv', 'csv');
+    raise exception 'cross-user batch insert unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+end;
+$$;
+
+do $$
+begin
   insert into public.invoices (vendor_name, invoice_number, amount)
-  values ('Duplicate', 'first-1', 10);
+  values ('First vendor', ' first-1 ', 10);
   raise exception 'case-insensitive duplicate unexpectedly succeeded';
 exception when unique_violation then
   null;

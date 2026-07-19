@@ -14,7 +14,9 @@ import {
 const mapping = {
   vendor_name: "Vendor",
   invoice_number: "Invoice",
-  amount: "Amount",
+  invoice_date: "Invoice Date",
+  subtotal: "Subtotal",
+  total_amount: "Total",
   currency: "Currency",
   status: "Status",
   due_date: "Due",
@@ -42,10 +44,12 @@ describe("parseAmount", () => {
 
 describe("mapping", () => {
   it("guesses distinct columns", () => {
-    expect(guessMapping(["Supplier", "Invoice #", "Total"])).toEqual({
+    expect(guessMapping(["Supplier", "Invoice #", "Invoice Date", "Subtotal", "Total"])).toEqual({
       vendor_name: "Supplier",
       invoice_number: "Invoice #",
-      amount: "Total",
+      invoice_date: "Invoice Date",
+      subtotal: "Subtotal",
+      total_amount: "Total",
     });
   });
 
@@ -56,8 +60,8 @@ describe("mapping", () => {
         {
           Vendor: "Acme",
           Invoice: "INV-1",
-          Amount: "10.25",
-          Currency: "",
+          "Invoice Date": "2030-01-01", Subtotal: "10.00", Total: "10.25",
+          Currency: "usd",
           Status: "ARCHIVED",
           Due: "2030-01-01",
         },
@@ -67,8 +71,8 @@ describe("mapping", () => {
       {
         vendor_name: "Acme",
         invoice_number: "INV-1",
-        amount: 10.25,
-        currency: "USD",
+        invoice_date: "2030-01-01", subtotal: 10, tax_rate: null, tax_amount: 0, total_amount: 10.25, amount: 10.25,
+        currency: "USD", supplier_tax_id: null, buyer_name: null, buyer_tax_id: null, purchase_order_number: null, payment_terms: null,
         status: "archived",
         due_date: "2030-01-01",
       },
@@ -78,10 +82,10 @@ describe("mapping", () => {
   it("detects duplicate invoice numbers case-insensitively", () => {
     const invoices = applyMapping(
       {
-        headers: ["Vendor", "Invoice", "Amount"],
+        headers: Object.values(mapping),
         rows: [
-          { Vendor: "A", Invoice: "INV-1", Amount: "1" },
-          { Vendor: "B", Invoice: "inv-1", Amount: "2" },
+          { Vendor: "A", Invoice: "INV-1", "Invoice Date": "2030-01-01", Subtotal: "1", Total: "1" },
+          { Vendor: "A", Invoice: " inv-1 ", "Invoice Date": "2030-01-01", Subtotal: "2", Total: "2" },
         ],
       },
       mapping,
@@ -91,6 +95,10 @@ describe("mapping", () => {
 });
 
 describe("file parsing", () => {
+  it("rejects an empty spreadsheet file with a clear error", async () => {
+    await expect(parseFile(csvFile(""))).rejects.toThrow("empty");
+  });
+
   it("parses CSV and rejects duplicate headers", async () => {
     await expect(parseFile(csvFile("Vendor,Invoice,Amount\nAcme,I-1,10"))).resolves.toEqual({
       headers: ["Vendor", "Invoice", "Amount"],
