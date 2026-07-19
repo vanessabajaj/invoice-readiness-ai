@@ -73,6 +73,13 @@ export function ImportClient() {
       .from("invoices")
       .insert(mappedRows)
       .select("id");
+    if (!error) {
+      await supabase.from("audit_events").insert({
+        action: "invoice.import",
+        entity: "invoice",
+        metadata: { count: data?.length ?? 0 },
+      });
+    }
     setImporting(false);
     setResult(error ? { error: error.message } : { inserted: data?.length ?? 0 });
   }
