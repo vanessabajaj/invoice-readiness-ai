@@ -108,7 +108,11 @@ const RULES: Rule[] = [
       : null,
 
   (inv) => {
-    if (inv.amount === null || inv.amount === undefined || Number.isNaN(inv.amount)) {
+    if (
+      inv.amount === null ||
+      inv.amount === undefined ||
+      !Number.isFinite(inv.amount)
+    ) {
       return {
         field: "amount",
         rule: "amount_required",
@@ -184,7 +188,7 @@ const RULES: Rule[] = [
       : {
           field: "status",
           rule: "status_unknown",
-          severity: "warning",
+          severity: "error",
           message: `Status "${inv.status}" is not one of ${INVOICE_STATUSES.join(", ")}.`,
         };
   },

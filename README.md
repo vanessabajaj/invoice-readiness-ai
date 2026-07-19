@@ -4,10 +4,10 @@ A [Next.js](https://nextjs.org) application (TypeScript, App Router, Tailwind CS
 
 ## Getting Started
 
-Install dependencies:
+Use Node.js 22 (see `.nvmrc`) and install dependencies from the lockfile:
 
 ```bash
-npm install
+npm ci
 ```
 
 Configure Supabase environment variables. Copy `.env.example` to `.env.local` and fill in your project's values (Supabase dashboard → Project Settings → API):
@@ -47,10 +47,11 @@ Enable the Google and GitHub providers in your Supabase dashboard (Authenticatio
 
 Signed-in users can bulk-import invoices from a spreadsheet at `/invoices/import`:
 
-- Upload a **CSV or XLSX** file (parsed client-side with `papaparse` / `xlsx`).
+- Upload a **CSV or XLSX** file up to 5 MB (parsed client-side with `papaparse` / `exceljs`). Imports are limited to 5,000 rows, 50 columns, 10,000 characters per cell, 200 XLSX archive entries, and 25 MB of expanded XLSX content.
 - Preview the first rows of the detected sheet.
-- Map source columns to invoice fields (`vendor_name`, `invoice_number`, `amount`, `currency`, `status`, `due_date`); the mapping is auto-guessed from the headers and can be adjusted. `vendor_name` and `amount` are required.
-- Import writes rows into the `invoices` table via the Supabase client; RLS assigns each row to the current user.
+- Map source columns to invoice fields (`vendor_name`, `invoice_number`, `amount`, `currency`, `status`, `due_date`); the mapping is auto-guessed from the headers and can be adjusted. `vendor_name`, `invoice_number`, and `amount` are required. Blank currency/status values default to `USD`/`draft`.
+- Every row must pass readiness validation before import. Ambiguous amounts and non-ISO dates are rejected.
+- Import writes rows into the `invoices` table via the Supabase client. The `user_id` default assigns the authenticated user and RLS enforces ownership. A per-user invoice-number constraint makes retries and repeated files idempotent.
 
 ## Validation & readiness
 
@@ -72,6 +73,12 @@ Run the unit tests:
 
 ```bash
 npm test
+```
+
+Run local database/RLS integration tests (requires Docker):
+
+```bash
+npm run test:db
 ```
 
 ## Dashboard
@@ -110,6 +117,9 @@ npx supabase db push
 - `npm run start` — run the production build
 - `npm run lint` — run ESLint
 - `npm test` — run unit tests (Vitest)
+- `npm run typecheck` — run TypeScript without emitting files
+- `npm run test:db` — reset local Supabase and run two-user RLS/integrity tests
+- `npm run verify` — run unit tests, lint, typecheck, and production build
 
 ## Learn More
 

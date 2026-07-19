@@ -84,9 +84,9 @@ describe("validateInvoice", () => {
     );
   });
 
-  it("warns on unrecognized status only", () => {
+  it("rejects an unrecognized status", () => {
     const result = validateInvoice({ ...validInvoice, status: "archived" });
-    expect(result.ready).toBe(true);
+    expect(result.ready).toBe(false);
     expect(result.issues.map((i) => i.rule)).toContain("status_unknown");
     expect(rules({ ...validInvoice, status: "draft" })).not.toContain(
       "status_unknown",

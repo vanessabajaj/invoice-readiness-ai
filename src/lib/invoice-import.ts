@@ -1,5 +1,15 @@
+import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import Papa from "papaparse";
-import * as XLSX from "xlsx";
+
+export const IMPORT_LIMITS = {
+  maxFileBytes: 5 * 1024 * 1024,
+  maxRows: 5_000,
+  maxColumns: 50,
+  maxCellCharacters: 10_000,
+  maxArchiveEntries: 200,
+  maxExpandedBytes: 25 * 1024 * 1024,
+} as const;
 
 export type ParsedSheet = {
   headers: string[];
@@ -10,11 +20,9 @@ export type InvoiceField = {
   key: string;
   label: string;
   required: boolean;
-  /** Header substrings used to auto-guess the source column. */
   aliases: string[];
 };
 
-// Target columns in the `invoices` table that can be populated from a file.
 export const INVOICE_FIELDS: InvoiceField[] = [
   {
     key: "vendor_name",
@@ -25,7 +33,7 @@ export const INVOICE_FIELDS: InvoiceField[] = [
   {
     key: "invoice_number",
     label: "Invoice number",
-    required: false,
+    required: true,
     aliases: ["invoice number", "invoice no", "invoice #", "number", "inv"],
   },
   {
@@ -56,50 +64,127 @@ export const INVOICE_FIELDS: InvoiceField[] = [
 
 const norm = (value: string) => value.trim().toLowerCase();
 
-function toSheet(headers: string[], rawRows: unknown[][]): ParsedSheet {
-  const cleanHeaders = headers.map((h) => String(h ?? "").trim());
+function isoDate(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function cellText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return isoDate(value);
+  if (typeof value === "object") {
+    const cell = value as {
+      result?: unknown;
+      text?: unknown;
+      richText?: { text?: unknown }[];
+    };
+    if (cell.result !== undefined) return cellText(cell.result);
+    if (cell.text !== undefined) return cellText(cell.text);
+    if (Array.isArray(cell.richText)) {
+      return cell.richText.map((part) => cellText(part.text)).join("");
+    }
+    throw new Error("Unsupported spreadsheet cell value.");
+  }
+  return String(value).trim();
+}
+
+function toSheet(rawHeaders: unknown[], rawRows: unknown[][]): ParsedSheet {
+  if (rawHeaders.length > IMPORT_LIMITS.maxColumns) {
+    throw new Error(`Files may contain at most ${IMPORT_LIMITS.maxColumns} columns.`);
+  }
+  if (rawRows.length > IMPORT_LIMITS.maxRows) {
+    throw new Error(`Files may contain at most ${IMPORT_LIMITS.maxRows} rows.`);
+  }
+
+  const headers = rawHeaders.map(cellText);
+  const populatedHeaders = headers.filter(Boolean);
+  const normalizedHeaders = populatedHeaders.map(norm);
+  if (new Set(normalizedHeaders).size !== normalizedHeaders.length) {
+    throw new Error("Column headers must be unique.");
+  }
+
   const rows = rawRows
-    .filter((row) => row.some((cell) => String(cell ?? "").trim() !== ""))
+    .filter((row) => row.some((cell) => cellText(cell) !== ""))
     .map((row) => {
       const record: Record<string, string> = {};
-      cleanHeaders.forEach((header, i) => {
-        if (header) record[header] = String(row[i] ?? "").trim();
+      headers.forEach((header, index) => {
+        if (!header) return;
+        const value = cellText(row[index]);
+        if (value.length > IMPORT_LIMITS.maxCellCharacters) {
+          throw new Error(
+            `Cells may contain at most ${IMPORT_LIMITS.maxCellCharacters} characters.`,
+          );
+        }
+        record[header] = value;
       });
       return record;
     });
-  return { headers: cleanHeaders.filter(Boolean), rows };
+
+  return { headers: populatedHeaders, rows };
 }
 
 export async function parseFile(file: File): Promise<ParsedSheet> {
-  const isCsv =
-    file.type === "text/csv" || file.name.toLowerCase().endsWith(".csv");
+  if (file.size > IMPORT_LIMITS.maxFileBytes) {
+    throw new Error("File is larger than 5 MB.");
+  }
 
+  const name = file.name.toLowerCase();
+  const isCsv = file.type === "text/csv" || name.endsWith(".csv");
   if (isCsv) {
-    const text = await file.text();
-    const result = Papa.parse<string[]>(text, {
+    const result = Papa.parse<string[]>(await file.text(), {
       skipEmptyLines: "greedy",
     });
+    if (result.errors.length > 0) {
+      throw new Error(result.errors[0]?.message ?? "Malformed CSV file.");
+    }
     const [headerRow, ...dataRows] = result.data;
-    if (!headerRow) return { headers: [], rows: [] };
-    return toSheet(headerRow, dataRows);
+    return headerRow ? toSheet(headerRow, dataRows) : { headers: [], rows: [] };
+  }
+
+  if (!name.endsWith(".xlsx")) {
+    throw new Error("Only CSV and XLSX files are supported.");
   }
 
   const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: "array" });
-  const firstSheetName = workbook.SheetNames[0];
-  if (!firstSheetName) return { headers: [], rows: [] };
-  const sheet = workbook.Sheets[firstSheetName];
-  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
-    header: 1,
-    blankrows: false,
-    raw: false,
+  const archive = await JSZip.loadAsync(buffer);
+  const entries = Object.values(archive.files);
+  if (entries.length > IMPORT_LIMITS.maxArchiveEntries) {
+    throw new Error(
+      `XLSX files may contain at most ${IMPORT_LIMITS.maxArchiveEntries} archive entries.`,
+    );
+  }
+  const expandedBytes = entries.reduce((total, entry) => {
+    const metadata = entry as typeof entry & {
+      _data?: { uncompressedSize?: number };
+    };
+    return total + (metadata._data?.uncompressedSize ?? 0);
+  }, 0);
+  if (expandedBytes > IMPORT_LIMITS.maxExpandedBytes) {
+    throw new Error("Expanded XLSX content is larger than 25 MB.");
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) return { headers: [], rows: [] };
+  if (worksheet.actualColumnCount > IMPORT_LIMITS.maxColumns) {
+    throw new Error(`Files may contain at most ${IMPORT_LIMITS.maxColumns} columns.`);
+  }
+  if (worksheet.actualRowCount - 1 > IMPORT_LIMITS.maxRows) {
+    throw new Error(`Files may contain at most ${IMPORT_LIMITS.maxRows} rows.`);
+  }
+
+  const matrix: unknown[][] = [];
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    const values = Array.isArray(row.values) ? row.values.slice(1) : [];
+    matrix.push(values);
   });
   const [headerRow, ...dataRows] = matrix;
-  if (!headerRow) return { headers: [], rows: [] };
-  return toSheet(headerRow.map((h) => String(h ?? "")), dataRows);
+  return headerRow ? toSheet(headerRow, dataRows) : { headers: [], rows: [] };
 }
 
-/** Best-effort mapping from target field key -> source header. */
 export function guessMapping(headers: string[]): Record<string, string> {
   const mapping: Record<string, string> = {};
   const used = new Set<string>();
@@ -107,11 +192,11 @@ export function guessMapping(headers: string[]): Record<string, string> {
   for (const field of INVOICE_FIELDS) {
     const match = headers.find((header) => {
       if (used.has(header)) return false;
-      const h = norm(header);
+      const normalized = norm(header);
       return (
-        h === field.key ||
-        h === norm(field.label) ||
-        field.aliases.some((alias) => h.includes(alias))
+        normalized === field.key ||
+        normalized === norm(field.label) ||
+        field.aliases.some((alias) => normalized.includes(alias))
       );
     });
     if (match) {
@@ -124,42 +209,58 @@ export function guessMapping(headers: string[]): Record<string, string> {
 
 export type MappedInvoice = {
   vendor_name: string;
-  invoice_number: string | null;
+  invoice_number: string;
   amount: number;
-  currency: string | null;
-  status: string | null;
+  currency: string;
+  status: string;
   due_date: string | null;
 };
 
-const ALLOWED_STATUSES = ["draft", "pending", "ready", "rejected"];
+const CURRENCY_SYMBOLS = /^[\s$€£¥₹]+|[\s$€£¥₹]+$/g;
 
-function parseAmount(value: string | undefined): number {
-  if (!value) return 0;
-  const cleaned = value.replace(/[^0-9.-]/g, "");
-  const n = Number.parseFloat(cleaned);
-  return Number.isFinite(n) ? n : 0;
+export function parseAmount(value: string | undefined): number {
+  if (!value) return Number.NaN;
+  let cleaned = value.trim().replace(CURRENCY_SYMBOLS, "");
+  const parenthesized = /^\((.*)\)$/.exec(cleaned);
+  if (parenthesized) cleaned = `-${parenthesized[1]}`;
+  if (!/^-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(cleaned)) {
+    return Number.NaN;
+  }
+  const amount = Number(cleaned.replaceAll(",", ""));
+  return Number.isSafeInteger(Math.round(amount * 100)) ? amount : Number.NaN;
 }
 
-/** Apply a mapping to parsed rows, producing rows shaped for the invoices table. */
 export function applyMapping(
   sheet: ParsedSheet,
   mapping: Record<string, string>,
 ): MappedInvoice[] {
   const get = (row: Record<string, string>, key: string) => {
     const header = mapping[key];
-    return header ? (row[header] ?? "") : "";
+    return header ? (row[header] ?? "").trim() : "";
   };
 
-  return sheet.rows.map((row) => {
-    const status = get(row, "status").toLowerCase();
-    const currency = get(row, "currency").toUpperCase();
-    return {
-      vendor_name: get(row, "vendor_name"),
-      invoice_number: get(row, "invoice_number") || null,
-      amount: parseAmount(get(row, "amount")),
-      currency: currency || null,
-      status: ALLOWED_STATUSES.includes(status) ? status : null,
-      due_date: get(row, "due_date") || null,
-    };
+  return sheet.rows.map((row) => ({
+    vendor_name: get(row, "vendor_name"),
+    invoice_number: get(row, "invoice_number"),
+    amount: parseAmount(get(row, "amount")),
+    currency: (get(row, "currency") || "USD").toUpperCase(),
+    status: (get(row, "status") || "draft").toLowerCase(),
+    due_date: get(row, "due_date") || null,
+  }));
+}
+
+export function duplicateInvoiceRows(invoices: MappedInvoice[]): Set<number> {
+  const firstRow = new Map<string, number>();
+  const duplicates = new Set<number>();
+  invoices.forEach((invoice, index) => {
+    const key = invoice.invoice_number.trim().toLowerCase();
+    if (!key) return;
+    const previous = firstRow.get(key);
+    if (previous === undefined) firstRow.set(key, index);
+    else {
+      duplicates.add(previous);
+      duplicates.add(index);
+    }
   });
+  return duplicates;
 }

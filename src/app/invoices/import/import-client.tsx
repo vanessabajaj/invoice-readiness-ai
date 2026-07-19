@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import {
   applyMapping,
+  duplicateInvoiceRows,
   guessMapping,
   INVOICE_FIELDS,
   parseFile,
@@ -38,9 +39,13 @@ export function ImportClient() {
       }
       setSheet(parsed);
       setMapping(guessMapping(parsed.headers));
-    } catch {
+    } catch (error) {
       setSheet(null);
-      setParseError("Could not read this file. Upload a valid CSV or XLSX.");
+      setParseError(
+        error instanceof Error
+          ? error.message
+          : "Could not read this file. Upload a valid CSV or XLSX.",
+      );
     }
   }
 
@@ -57,12 +62,21 @@ export function ImportClient() {
     () => summarizeValidation(mappedRows),
     [mappedRows],
   );
+  const duplicateRows = useMemo(
+    () => duplicateInvoiceRows(mappedRows),
+    [mappedRows],
+  );
 
   const missingRequired = INVOICE_FIELDS.filter(
     (f) => f.required && !mapping[f.key],
   );
   const canImport =
-    sheet !== null && missingRequired.length === 0 && mappedRows.length > 0;
+    sheet !== null &&
+    missingRequired.length === 0 &&
+    mappedRows.length > 0 &&
+    validations.every((validation) => validation.ready) &&
+    duplicateRows.size === 0 &&
+    !(result && "inserted" in result);
 
   async function handleImport() {
     if (!canImport) return;
@@ -71,7 +85,10 @@ export function ImportClient() {
     const supabase = createClient();
     const { data, error } = await supabase
       .from("invoices")
-      .insert(mappedRows)
+      .upsert(mappedRows, {
+        onConflict: "user_id,invoice_number",
+        ignoreDuplicates: true,
+      })
       .select("id");
     setImporting(false);
     setResult(error ? { error: error.message } : { inserted: data?.length ?? 0 });
@@ -86,14 +103,14 @@ export function ImportClient() {
           className="flex h-32 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-black/[.12] text-sm text-zinc-600 transition-colors hover:border-black/[.24] hover:bg-black/[.02] dark:border-white/[.16] dark:text-zinc-400 dark:hover:border-white/[.28] dark:hover:bg-white/[.02]"
         >
           <span className="font-medium text-black dark:text-zinc-50">
-            {fileName ?? "Choose a CSV or XLSX file"}
+            {fileName ?? "Choose a CSV or XLSX file (max 5 MB)"}
           </span>
-          <span>Click to browse — .csv, .xls, .xlsx</span>
+          <span>Click to browse — .csv or .xlsx</span>
         </button>
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,.xls,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+          accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];
@@ -238,6 +255,17 @@ export function ImportClient() {
                 {missingRequired.map((f) => f.label).join(", ")}.
               </p>
             ) : null}
+            {missingRequired.length === 0 &&
+            validations.some((validation) => !validation.ready) ? (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                Fix every error shown in the preview before importing.
+              </p>
+            ) : null}
+            {duplicateRows.size > 0 ? (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                Duplicate invoice numbers were found on {duplicateRows.size} rows.
+              </p>
+            ) : null}
           </section>
 
           <section className="flex flex-col gap-3">
@@ -254,7 +282,7 @@ export function ImportClient() {
               </button>
               {result && "inserted" in result ? (
                 <p className="text-sm text-green-600 dark:text-green-400">
-                  Imported {result.inserted} invoice
+                  Imported {result.inserted} new invoice
                   {result.inserted === 1 ? "" : "s"}.{" "}
                   <Link href="/invoices" className="underline">
                     View dashboard
