@@ -7,6 +7,7 @@ import {
   validateInvoice,
   type InvoiceInput,
 } from "@/lib/validation";
+import { ExportReportButton } from "./export-button";
 
 type InvoiceRow = InvoiceInput & {
   id: string;
@@ -56,12 +57,21 @@ export default async function InvoicesDashboardPage() {
               Readiness of your invoices for financial processing.
             </p>
           </div>
-          <Link
-            href="/invoices/import"
-            className="flex h-10 items-center justify-center rounded-full bg-foreground px-5 text-sm font-medium text-background transition-colors hover:opacity-90"
-          >
-            Import invoices
-          </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/audit"
+              className="flex h-10 items-center justify-center rounded-full border border-black/[.12] px-5 text-sm font-medium text-black transition-colors hover:bg-black/[.04] dark:border-white/[.16] dark:text-zinc-50 dark:hover:bg-white/[.06]"
+            >
+              Audit history
+            </Link>
+            <ExportReportButton invoices={invoices} />
+            <Link
+              href="/invoices/import"
+              className="flex h-10 items-center justify-center rounded-full bg-foreground px-5 text-sm font-medium text-background transition-colors hover:opacity-90"
+            >
+              Import invoices
+            </Link>
+          </div>
         </header>
 
         {error ? (

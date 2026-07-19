@@ -80,14 +80,31 @@ npm test
 average readiness score, a status breakdown, the top readiness issues, and a table
 of the current user's invoices with per-row readiness.
 
+## Report export & audit history
+
+- **Export report** — on the `/invoices` dashboard, "Export report (CSV)" downloads a
+  readiness report of the current user's invoices (vendor, number, amount, currency,
+  status, due date, ready flag, readiness score, and the list of issues). The report
+  is generated client-side by `src/lib/report.ts` (`invoicesToCsvReport`). The button
+  is disabled when there are no invoices and surfaces an inline error if the export
+  fails.
+- **Audit history** — `/audit` (protected) lists recent account activity, newest
+  first: invoice imports and report exports. Events are written to the append-only
+  `audit_events` table on import and export. The page has loading (`loading.tsx`
+  skeleton), empty ("No activity yet."), and error states.
+
+Both features are behind authentication, and `audit_events` has per-user RLS so a
+user only ever sees their own activity.
+
 ## Database
 
 SQL migrations live in `supabase/migrations/` and are managed with the [Supabase CLI](https://supabase.com/docs/guides/local-development):
 
 - `profiles` — one row per auth user, auto-created on signup via an `auth.users` trigger.
 - `invoices` — per-user invoices (`user_id` defaults to `auth.uid()`).
+- `audit_events` — append-only activity log (`user_id` defaults to `auth.uid()`); users can read and insert their own events but not update or delete them.
 
-Both tables have Row Level Security enabled so each user can only access their own rows.
+All tables have Row Level Security enabled so each user can only access their own rows.
 
 Run migrations against a local stack:
 
