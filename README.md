@@ -33,19 +33,17 @@ Open [http://localhost:3000](http://localhost:3000) in your browser to see the a
 
 ## Authentication
 
-Uses [Supabase](https://supabase.com) OAuth (Google and GitHub) via `@supabase/ssr`.
+No login page. Uses [Supabase](https://supabase.com) anonymous sign-in via `@supabase/ssr` — every visitor is silently assigned their own Supabase user on first request, so `invoices` rows still stay scoped per-visitor via Row Level Security.
 
 - `src/utils/supabase/*` — browser, server, and proxy Supabase clients.
-- `src/proxy.ts` — refreshes the session on every request and redirects unauthenticated users to `/login`.
-- `src/app/login` — sign-in page with Google/GitHub buttons.
-- `src/app/auth/callback` — OAuth code-exchange route.
-- `/` is protected and shows the signed-in user with a sign-out button.
+- `src/proxy.ts` — refreshes the session on every request and creates an anonymous session for visitors who don't have one yet.
+- `/` shows the current session with a sign-out button (starts a fresh anonymous session on next visit).
 
-Enable the Google and GitHub providers in your Supabase dashboard (Authentication → Providers) and add `<your-app-url>/auth/callback` (e.g. `http://localhost:3000/auth/callback`) as a redirect URL under Authentication → URL Configuration.
+Requires "Allow anonymous sign-ins" enabled in the Supabase dashboard under Authentication → Sign In / Providers.
 
 ## Invoice import
 
-Signed-in users can bulk-import invoices from a spreadsheet at `/invoices/import`:
+Bulk-import invoices from a spreadsheet at `/invoices/import` (each visitor's anonymous session scopes their own invoices):
 
 - Upload a **CSV or XLSX** file up to 5 MB (parsed client-side with `papaparse` / `exceljs`). Imports are limited to 5,000 rows, 50 columns, 10,000 characters per cell, 200 XLSX archive entries, and 25 MB of expanded XLSX content.
 - Preview the first rows of the detected sheet.
@@ -83,9 +81,9 @@ npm run test:db
 
 ## Dashboard
 
-`/invoices` is a protected analysis dashboard showing total/ready/not-ready counts,
+`/invoices` is an analysis dashboard showing total/ready/not-ready counts,
 average readiness score, a status breakdown, the top readiness issues, and a table
-of the current user's invoices with per-row readiness.
+of the current visitor's invoices with per-row readiness.
 
 ## Database
 

@@ -28,14 +28,11 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
-  ) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
+  if (!user) {
+    // No login page: every visitor gets a Supabase anonymous session so RLS
+    // still scopes invoices per-visitor. Requires "Allow anonymous sign-ins"
+    // enabled in the Supabase dashboard (Authentication -> Sign In / Providers).
+    await supabase.auth.signInAnonymously();
   }
 
   // IMPORTANT: return the supabaseResponse object as-is so cookies stay in sync.

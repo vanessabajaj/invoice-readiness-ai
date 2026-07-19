@@ -1,6 +1,5 @@
 import Image from "next/image";
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import { signOut } from "./auth/actions";
 
@@ -10,14 +9,10 @@ export default async function Home() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect("/login");
-  }
-
-  const avatarUrl = user.user_metadata?.avatar_url as string | undefined;
+  const avatarUrl = user?.user_metadata?.avatar_url as string | undefined;
   const name =
-    (user.user_metadata?.full_name as string | undefined) ??
-    (user.user_metadata?.name as string | undefined);
+    (user?.user_metadata?.full_name as string | undefined) ??
+    (user?.user_metadata?.name as string | undefined);
 
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
@@ -33,9 +28,11 @@ export default async function Home() {
         ) : null}
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold tracking-tight text-black dark:text-zinc-50">
-            Signed in{name ? ` as ${name}` : ""}
+            Welcome{name ? `, ${name}` : ""}
           </h1>
-          <p className="text-zinc-600 dark:text-zinc-400">{user.email}</p>
+          {user?.email ? (
+            <p className="text-zinc-600 dark:text-zinc-400">{user.email}</p>
+          ) : null}
         </div>
         <div className="flex items-center gap-3">
           <Link

@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import {
   INVOICE_STATUSES,
@@ -15,13 +14,6 @@ type InvoiceRow = InvoiceInput & {
 
 export default async function InvoicesDashboardPage() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
 
   const { data, error } = await supabase
     .from("invoices")

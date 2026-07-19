@@ -1,17 +1,6 @@
-import { redirect } from "next/navigation";
-import { createClient } from "@/utils/supabase/server";
 import { ImportClient } from "./import-client";
 
 export default async function ImportInvoicesPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
-  }
-
   return (
     <main className="flex flex-1 flex-col items-center bg-zinc-50 px-4 py-10 dark:bg-black">
       <div className="flex w-full max-w-4xl flex-col gap-8">
